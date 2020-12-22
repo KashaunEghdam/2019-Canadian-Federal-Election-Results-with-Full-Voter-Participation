@@ -832,7 +832,7 @@ While this study provides key insights on what observational characteristics eff
 Furthermore, The General Social Survey data is too small to be an effective post-stratification dataset. Although it was more representative of the Canadian population then the CES dataset, it was smaller which very counteractive to have a training dataset that is larger than your post-stratification dataset. In addition, since Canadian election results are determined by the number of electoral seats won and not the popular vote, including information on which specific regions a person lives and which seat their vote is going towards, would allow us to predict which party is likely to win each seat. This would result in a much more realistic idea of the winner and what form of government they obtained.
 
 # Appendix 
-Code for this study can be found at: 
+Code for this study can be found at: https://github.com/kashaun52/The-effect-of-voter-turnout-on-the-2019-canadian-federal-election/blob/main/scripts/appendix.Rmd
 
 # References
 
