@@ -1,0 +1,640 @@
+---
+title: "appendix"
+author: "Kashaun Eghdam"
+date: "12/22/2020"
+output: html_document
+---
+Preamble: This code begins by collecting two survey datasets, from the Canadian Election Survey and the General Social Survey, and organizing the survey questions and their responses to into more confined groups so we can better analyze them. Once these groups have been defined for each survey, their distributions have been displayed using a series of bar graphs. Next this code runs a regression model on the CES dataset and we analyze both the validity and results of this model. Lastly, using post-stratification, we apply regression model to our GSS Dataset to generate a forecast for the 2019 Canadian Federal Election. 
+
+```{r, include = FALSE}
+# Load Packages, install.package() can be used if needed
+library(haven)
+library(tidyverse)
+library(labelled)
+library(jtools)
+library(boot)
+library(nnet)
+library(kableExtra)
+```
+
+```{r, include=FALSE, echo=FALSE}
+# Grabbing ces2015_web dataset
+ces2019_web <- read_csv("ces2019_web.csv")
+
+# Converting dataset to factor form
+ces2019_web <- labelled::to_factor(ces2019_web)
+```
+
+```{r, include=FALSE,echo=FALSE}
+# Select variables of interest
+select_data <- ces2019_web %>%
+  dplyr::select(cps19_votechoice,
+                cps19_yob,
+                cps19_gender,
+                cps19_province,
+                cps19_education,
+                cps19_children,
+                cps19_marital) %>% 
+  # rename variables 
+  rename(vote_2019 = cps19_votechoice,
+         age = cps19_yob, 
+         gender = cps19_gender,
+         province = cps19_province, 
+         education = cps19_education,
+         children = cps19_children,
+         marital_status = cps19_marital
+         )%>%
+  na.omit() 
+```
+
+```{r, include=FALSE,echo=FALSE}
+# grouping age into 5 categories, removing all other gender besides "male" and "female", confining education groupings, rename "Bloc Quebecois" from vote_2019,filter out territories for province list and lastly remove all NA values from this data.
+clean_data_CES <- select_data %>%
+  mutate(age = case_when(age <= 1959 ~ "60+",
+                         1960 <= age & age <= 1969 ~ "50 to 59",
+                         1970 <= age & age <= 1979 ~ "40 to 49",
+                         1980 <= age & age <= 1989 ~ "30 to 39",
+                         1990 <= age ~ "18 to 29"),
+         gender = case_when(gender == "A woman" ~ "Female", 
+                            gender == "A man" ~ "Male"),
+         children = case_when(children == "Yes" ~ "yes",
+                              children == "No" ~ "no"),
+         marital_status = case_when(marital_status == "Married" ~ "Married",
+                                    marital_status == "Living with a partner" ~ "Living with a partner",
+                                    marital_status == "Divorced" ~ "Divorced",
+                                    marital_status == "Never Married" ~ "Never Married",
+                                    marital_status == "Separated" ~ "Separated",
+                                    marital_status == "Widowed" ~ "Widowed"),
+         education = case_when(education == "No schooling" ~ "less than high school diploma",
+                               education == "Some elementary school" ~ "less than high school diploma",
+                               education == "Completed elementary school" ~ "less than high school diploma",
+                               education == "Some secondary/ high school" ~ "less than high school diploma",
+                               education == "Professional degree or doctorate" ~ 
+                                   "Univeristy degree above Bachelor's degree",
+                               education == "Master's degree" ~ 
+                                 "Univeristy degree above Bachelor's degree",
+                               education == 
+                                 "Some technical, community college, CEGEP, College Classique" ~ 
+                                 "Completed secondary/ high school",
+                               education == "Some university" ~ "Completed secondary/ high school",
+                               education == "Completed secondary/ high school" ~ 
+                                 "Completed secondary/ high school",
+                               education == "Bachelor's degree" ~ "Bachelor's degree",
+                               education == "Completed technical, community college, CEGEP, College Classique" ~ 
+                                 "Completed college or equivalent"
+                               ),
+         # Bloc Quebecois had a unicode character in replace of the e and since it was not recognizable by r, this code section attempts to rename the Bloc Quebecois
+         vote_2019 = case_when(vote_2019 == "Liberal Party" ~ ".Liberal Party",
+                               vote_2019 == "Conservative Party" ~ "Conservative Party",
+                               vote_2019 == "ndp" ~ "NDP",
+                               vote_2019 == "Green Party" ~ "Green Party",
+                               vote_2019 == "People's Party" ~ "People's Party",
+                               vote_2019 == "Another party (please specify)" ~ "Another party (please specify)",
+                               vote_2019 == "Don't know/ Prefer not to answer" ~ "Don't know/ Prefer not to answer",
+                               vote_2019 != "Liberal Party" | vote_2019 != "Conservative Party"| 
+                               vote_2019 != "ndp"| vote_2019 != "Green Party"| 
+                               vote_2019 != "People's Party" | vote_2019 != "Another party (please specify)" | 
+                               vote_2019 != "Don't know/ Prefer not to answer" ~ "Bloc Quebecois")) %>%
+  # remove "Don't know/ Prefer not to answer" and "Another party (please specify" for possible responses to vote_2019
+  filter(vote_2019 %in% c(".Liberal Party", "Conservative Party","NDP","Bloc Quebecois","Green Party",
+                          "People's Party")) %>%
+  # remove "Northwest Territories", "Nunavut" and "Yukon" to match with GSS
+   filter(province %in% c("Alberta", "British Columbia","Manitoba","New Brunswick","Newfoundland and Labrador",
+                          "Nova Scotia","Ontario","Prince Edward Island","Quebec","Saskatchewan")) %>%
+  # remove all responses that were not fully complete
+  na.omit()
+```
+
+
+# 2.2 Display of Survey Data
+
+```{r, echo=FALSE,out.width="70%"}
+# Graph of vote decisions of respondents for the CES, Graph 1
+clean_data_CES %>% 
+  ggplot(aes(x = vote_2019)) + 
+  geom_bar(colour="black", fill = 'blue') + 
+  labs(title = "Graph 1: Vote Decisions of Respondents", 
+       x = "Vote Choice",
+       y = "Number of Respondents"
+       ) + 
+  coord_flip() +
+  theme_minimal()
+
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of age proportions of respondents for the CES, Graph 2
+clean_data_CES %>% 
+  ggplot(aes(x = age)) + 
+  geom_bar(colour = "black", fill = "darkturquoise") +
+  labs(title = "Graph 2: Age Proportions of Respondents", 
+       x = "Age",
+       y = "Number of Respondents"
+       ) + 
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of gender proportions of respondents for the CES, Graph 3
+clean_data_CES %>% 
+  ggplot(aes(x = gender)) + 
+  geom_bar(colour = "black", fill = "firebrick2") + 
+  labs(title = "Graph 3: Gender Proportions of Respondents", 
+       x = "Gender",
+       y = "Number of Respondents"
+       ) +
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of the Races of respondents for the CES, Graph 4
+clean_data_CES %>% 
+  ggplot(aes(x = province)) + 
+  geom_bar(colour = "black", fill = "orangered1") + 
+  labs(title = "Graph 4: Province Respondents are Currently Residing in", 
+       x = "Province",
+       y = "Number of Respondents"
+       ) + 
+  coord_flip() + 
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of languages used by respondents for the CES, Graph 5
+clean_data_CES %>% 
+  ggplot(aes(x = education)) + 
+  geom_bar(colour = "black", fill = "springgreen4") + 
+  labs(title = "Graph 5: Education of Respondents", 
+       x = "Highest Education Level Completed",
+       y = "Number of Respondents"
+       ) + 
+  coord_flip() +
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of whether or not respondents have children for the CES, Graph 6
+clean_data_CES %>% 
+  ggplot(aes(x = children)) + 
+  geom_bar(colour = "black", fill = "yellow") + 
+  labs(title = "Graph 6: Whether Respondents have Children", 
+       x = "Yes/No",
+       y = "Number of Respondents"
+       ) +
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of languages used by respondents for the CES, Graph 7
+clean_data_CES %>% 
+  ggplot(aes(x = marital_status)) + 
+  geom_bar(colour = "black", fill = "steelblue") + 
+  labs(title = "Graph 7: Marital Status of Respondents ", 
+       x = "marital status",
+       y = "Number of Respondents"
+       ) + 
+  coord_flip() +
+  theme_minimal()
+```
+
+```{r, include=FALSE,echo=FALSE}
+gss <- read_csv("gss.csv")
+```
+
+```{r, include=FALSE,echo=FALSE}
+# Select variables of interest
+select_data2 <- gss %>%
+  dplyr::select(age,
+                sex,
+                province,
+                education,
+                total_children,
+                marital_status
+                ) %>% 
+  # rename variables 
+  rename(gender = sex,
+         children = total_children,
+          )%>%
+  na.omit() 
+```
+
+```{r, include=FALSE, echo=FALSE}
+# make adjustments to the dataset in order to match with the CES dataset.
+clean_data_GSS <- select_data2 %>%
+  # group age into 5 categories
+  mutate(age = cut(as.numeric(age), 
+                         breaks = c(18, 30, 40, 50, 60, 100), 
+                         right = FALSE,
+                         labels = c("18 to 29", 
+                                    "30 to 39", 
+                                    "40 to 49", 
+                                    "50 to 59",
+                                    "60+")),
+         # change total children question into a question regarding if respondents have had children or not 
+         children = cut(as.numeric(children), 
+                         breaks = c(0,1,7), 
+                         right = FALSE,
+                         labels = c("no", 
+                                    "yes")),
+         # change "living in common-law" to "living with a partner" and "Single, never married" to "Never Married"  to match CES responses
+         marital_status = case_when(marital_status == "Married" ~ "Married",
+                                    marital_status == "Living common-law" ~ "Living with a partner",
+                                    marital_status == "Divorced" ~ "Divorced",
+                                    marital_status == "Single, never married" ~ "Never Married",
+                                    marital_status == "Separated" ~ "Separated",
+                                    marital_status == "Widowed" ~ "Widowed"),
+         # change response name to match survey data
+         education = case_when(education == "Less than high school diploma or its equivalent" 
+                               ~ "less than high school diploma",
+                               education == "High school diploma or a high school equivalency certificate" 
+                               ~ "Completed secondary/ high school",
+                               education == "Trade certificate or diploma"
+                               ~ "Completed college or equivalent",
+                               education == "University certificate, diploma or degree above the bach..." ~ 
+                                   "Univeristy degree above Bachelor's degree",
+                               education == "University certificate or diploma below the bachelor's level" ~ 
+                                 "Bachelor's degree",
+                               education == "Bachelor's degree (e.g. B.A., B.Sc., LL.B.)" ~ "Bachelor's degree",
+                               education == "College, CEGEP or other non-university certificate or di..." ~ 
+                                 "Completed college or equivalent"
+                               )) %>%
+  na.omit()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of age proportions of respondents for the GSS, Graph 8
+clean_data_GSS %>% 
+  ggplot(aes(x = age)) + 
+  geom_bar(colour = "black", fill = "darkturquoise") +
+  labs(title = "Graph 8: Age Proportions of Respondents", 
+       x = "Age",
+       y = "Number of Respondents"
+       ) + 
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of gender proportions of respondents for the GSS, Graph 9
+clean_data_GSS %>% 
+  ggplot(aes(x = gender)) + 
+  geom_bar(colour = "black", fill = "firebrick2") + 
+  labs(title = "Graph 9: Gender Proportions of Respondents", 
+       x = "Gender",
+       y = "Number of Respondents"
+       ) +
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of the Province respondents are currently residing in for the GSS, Graph 10
+clean_data_GSS %>% 
+  ggplot(aes(x = province)) + 
+  geom_bar(colour = "black", fill = "orangered1") + 
+  labs(title = "Graph 10: Province Respondents are Currently Residing in", 
+       x = "Province",
+       y = "Number of Respondents"
+       ) + 
+  coord_flip() + 
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of highest level of education achieved by respondents for the GSS, Graph 11
+clean_data_GSS %>% 
+  ggplot(aes(x = education)) + 
+  geom_bar(colour = "black", fill = "springgreen4") + 
+  labs(title = "Graph 11: Education of Respondents", 
+       x = "Highest Education Level Completed",
+       y = "Number of Respondents"
+       ) + 
+  coord_flip() +
+  theme_minimal()
+
+
+jim <- clean_data_GSS %>%
+  filter(education %in% c("Univeristy degree above Bachelor's degree"))
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of whether or not respondents have children for the GSS, Graph 12
+clean_data_GSS %>% 
+  ggplot(aes(x = children)) + 
+  geom_bar(colour = "black", fill = "yellow") + 
+  labs(title = "Graph 12: Whether respondents have children", 
+       x = "Yes/No",
+       y = "Number of Respondents"
+       ) +
+  theme_minimal()
+```
+
+```{r, echo=FALSE,out.width="70%"}
+# Bar graph of languages used by respondents for the GSS, Graph 13
+clean_data_GSS %>% 
+  ggplot(aes(x = marital_status)) + 
+  geom_bar(colour = "black", fill = "steelblue") + 
+  labs(title = "Graph 13: marital status of respondents ", 
+       x = "marital status",
+       y = "Number of Respondents"
+       ) + 
+  coord_flip() +
+  theme_minimal()
+```
+
+
+```{r, include=FALSE}
+# Regression model
+#stop iterations at 130 as that is when model converges approximately, obtained 130 through guess and check
+
+multinom_model <- multinom(vote_2019 ~ 
+                    age + 
+                    gender +
+                    province + 
+                    education +
+                    children +
+                    marital_status,
+                  data = clean_data_CES, 
+                  maxit = 130
+)
+# to convert coefficients into odds
+exp(coef(multinom_model))
+```
+
+
+## 3.2 Model Validation
+```{r, include=FALSE, echo=FALSE}
+## the following code predicts voting response for respondents of the CES, then compares what the model predicted and what voting responses actually were.This calculates the prediction accuracy of the model
+pred.multinom <- predict(multinom_model, clean_data_CES)
+pred_accuracy <- mean(pred.multinom == clean_data_CES$vote_2019)
+
+```
+
+```{r, include = FALSE}
+# add row id for test dataset
+test_data <- clean_data_CES %>%
+  mutate(id = row_number())
+```
+
+```{r, warning = FALSE, include = FALSE}
+# Splicing Data into Testing and Training Set
+set.seed(333333333)
+# approxametly 20% of the data is used for MSPE calculation
+test_mspe <- sample_n(test_data, 4972)
+# the remaining 80% is used for msres calculation
+test_msres <- test_data %>%
+  anti_join(test_mspe)
+```
+
+```{r, include = FALSE}
+#Model validation, comparing MSPE and MSres
+# fitting sample dataset to our model
+msrestest1 <- multinom(vote_2019 ~ 
+                    age + 
+                    gender +
+                    province + 
+                    education +
+                    children +
+                    marital_status,
+                  data = test_msres,
+                  maxit = 130)
+mspetest2 <- multinom(vote_2019 ~ 
+                    age + 
+                    gender +
+                    province + 
+                    education +
+                    children +
+                    marital_status,
+                  data = test_mspe,
+                  maxit = 130)
+                      
+#calculation of the mspe for sample dataset
+mspe = sum(resid(mspetest2)^2)/ length(test_mspe$vote_2019)
+#calculation of the MSres for our main dataset
+# 13 represent the degrees of freedom in our model 
+msres = sum(resid(msrestest1)^2)/(length(test_msres$vote_2019) - 30)
+mspe
+msres
+```
+
+
+```{r,echo = FALSE,out.width="25%"}
+#Table 1: Summary Statistics of Regression Model
+broom::tidy(multinom_model) %>% 
+  kable(digits = 3) %>%
+  kable_styling(fixed_thead = T) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+```
+
+```{r,include=FALSE}
+# Create Cells
+cell_counts <- clean_data_GSS %>% 
+  group_by(age, gender, province, education, children, marital_status) %>%
+  count() %>%
+  mutate(proportion = n/19643) 
+# predict voting preference for each individual cell using the regression model
+cell_counts$vote_2019 <- multinom_model %>% predict(cell_counts, "class")
+# creat csv file for cells
+write.csv(cell_counts,"cells.csv")
+```
+
+```{r,echo=FALSE,out.width="50%"}
+# Table 2: Popular Vote Predictor for each province
+#The following code creates a table grouping percent of votes per province, the code will be updated once a more efficient way of calculating these totals is found
+cell_counts_1 <- cell_counts %>%filter(province %in% c("Alberta"))
+cell_counts_2 <- cell_counts %>%filter(province %in% c("British Columbia"))
+cell_counts_3 <- cell_counts %>%filter(province %in% c("Manitoba"))
+cell_counts_4 <- cell_counts %>%filter(province %in% c("New Brunswick"))
+cell_counts_5 <- cell_counts %>%filter(province %in% c("Newfoundland and Labrador"))
+cell_counts_6 <- cell_counts %>%filter(province %in% c("Nova Scotia"))
+cell_counts_7 <- cell_counts %>%filter(province %in% c("Ontario"))
+cell_counts_8 <- cell_counts %>%filter(province %in% c("Prince Edward Island"))
+cell_counts_9 <- cell_counts %>%filter(province %in% c("Quebec"))
+cell_counts_10 <- cell_counts %>%filter(province %in% c("Saskatchewan"))
+
+Liberal_popular_vote <- cell_counts %>% 
+  filter(vote_2019 %in% c(".Liberal Party"))
+Liberal_popular_vote_percent <- sum(Liberal_popular_vote$proportion) * 100
+
+Conservative_popular_vote <- cell_counts %>% 
+  filter(vote_2019 %in% c("Conservative Party"))
+Conservative_popular_vote_percent <- sum(Conservative_popular_vote$proportion) * 100
+
+NDP_popular_vote <- cell_counts %>% 
+  filter(vote_2019 %in% c("NDP"))
+NDP_popular_vote_percent <- sum(NDP_popular_vote$proportion) * 100
+
+Bloc_Quebecois_popular_vote <- cell_counts %>% 
+  filter(vote_2019 %in% c("Bloc Quebecois"))
+Bloc_Quebecois_popular_vote_percent <- sum(Bloc_Quebecois_popular_vote$proportion) * 100
+
+Green_popular_vote <- cell_counts %>% 
+  filter(vote_2019 %in% c("Green Party"))
+Green_popular_vote_percent <- sum(Green_popular_vote$proportion) * 100
+
+L_pv_1 <- cell_counts_1 %>% filter(vote_2019 %in% c(".Liberal Party")) 
+L_pv_11 <- 100*(sum(L_pv_1$n))/(sum(cell_counts_1$n))
+C_pv_1 <- cell_counts_1 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_11 <- 100*sum(C_pv_1$n)/sum(cell_counts_1$n)
+N_pv_1 <- cell_counts_1 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_11 <- 100*sum(N_pv_1$n)/sum(cell_counts_1$n)
+B_pv_1 <- cell_counts_1 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_11 <- 100*sum(B_pv_1$n)/sum(cell_counts_1$n)
+G_pv_1 <- cell_counts_1 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_11 <- 100*sum(G_pv_1$n)/sum(cell_counts_1$n)
+
+L_pv_2 <- cell_counts_2 %>% filter(vote_2019 %in% c(".Liberal Party"))
+L_pv_21 <- 100*sum(L_pv_2$n)/sum(cell_counts_2$n)
+C_pv_2 <- cell_counts_2 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_21 <- 100*sum(C_pv_2$n)/sum(cell_counts_2$n)
+N_pv_2 <- cell_counts_2 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_21 <- 100*sum(N_pv_2$n)/sum(cell_counts_2$n)
+B_pv_2 <- cell_counts_2 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_21 <- 100*sum(B_pv_2$n)/sum(cell_counts_2$n)
+G_pv_2 <- cell_counts_2 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_21 <- 100*sum(G_pv_2$n)/sum(cell_counts_2$n)
+
+L_pv_3 <- cell_counts_3 %>% filter(vote_2019 %in% c(".Liberal Party"))
+L_pv_31 <- 100*sum(L_pv_3$n)/sum(cell_counts_3$n)
+C_pv_3 <- cell_counts_3 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_31 <- 100*sum(C_pv_3$n)/sum(cell_counts_3$n)
+N_pv_3 <- cell_counts_3 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_31 <- 100*sum(N_pv_3$n)/sum(cell_counts_3$n)
+B_pv_3 <- cell_counts_3 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_31 <- 100*sum(B_pv_3$n)/sum(cell_counts_3$n)
+G_pv_3 <- cell_counts_3 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_31 <- 100*sum(G_pv_3$n)/sum(cell_counts_3$n)
+
+L_pv_4 <- cell_counts_4 %>% filter(vote_2019 %in% c(".Liberal Party")) 
+L_pv_41 <- 100*sum(L_pv_4$n)/sum(cell_counts_4$n)
+C_pv_4 <- cell_counts_4 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_41 <- 100*sum(C_pv_4$n)/sum(cell_counts_4$n)
+N_pv_4 <- cell_counts_4 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_41 <- 100*sum(N_pv_4$n)/sum(cell_counts_4$n)
+B_pv_4 <- cell_counts_4 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_41 <- 100*sum(B_pv_4$n)/sum(cell_counts_4$n)
+G_pv_4 <- cell_counts_4 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_41 <- 100*sum(G_pv_4$n)/sum(cell_counts_4$n)
+
+L_pv_5 <- cell_counts_5 %>% filter(vote_2019 %in% c(".Liberal Party")) 
+L_pv_51 <- 100*sum(L_pv_5$n)/sum(cell_counts_5$n)
+C_pv_5 <- cell_counts_5 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_51 <- 100*sum(C_pv_5$n)/sum(cell_counts_5$n)
+N_pv_5 <- cell_counts_5 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_51 <- 100*sum(N_pv_5$n)/sum(cell_counts_5$n)
+B_pv_5 <- cell_counts_5 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_51 <- 100*sum(B_pv_5$n)/sum(cell_counts_5$n)
+G_pv_5 <- cell_counts_5 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_51 <- 100*sum(G_pv_5$n)/sum(cell_counts_5$n)
+
+L_pv_6 <- cell_counts_6 %>% filter(vote_2019 %in% c(".Liberal Party"))
+L_pv_61 <- 100*sum(L_pv_6$n)/sum(cell_counts_6$n)
+C_pv_6 <- cell_counts_6 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_61 <- 100*sum(C_pv_6$n)/sum(cell_counts_6$n)
+N_pv_6 <- cell_counts_6 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_61 <- 100*sum(N_pv_6$n)/sum(cell_counts_6$n)
+B_pv_6 <- cell_counts_6 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_61 <- 100*sum(B_pv_6$n)/sum(cell_counts_6$n)
+G_pv_6 <- cell_counts_6 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_61 <- 100*sum(G_pv_6$n)/sum(cell_counts_6$n)
+
+L_pv_7 <- cell_counts_7 %>% filter(vote_2019 %in% c(".Liberal Party"))
+L_pv_71 <- 100*sum(L_pv_7$n)/sum(cell_counts_7$n)
+C_pv_7 <- cell_counts_7 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_71 <- 100*sum(C_pv_7$n)/sum(cell_counts_7$n)
+N_pv_7 <- cell_counts_7 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_71 <- 100*sum(N_pv_7$n)/sum(cell_counts_7$n)
+B_pv_7 <- cell_counts_7 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_71 <- 100*sum(B_pv_7$n)/sum(cell_counts_7$n)
+G_pv_7 <- cell_counts_7 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_71 <- 100*sum(G_pv_7$n)/sum(cell_counts_7$n)
+
+L_pv_8 <- cell_counts_8 %>% filter(vote_2019 %in% c(".Liberal Party")) 
+L_pv_81 <- 100*sum(L_pv_8$n)/sum(cell_counts_8$n)
+C_pv_8 <- cell_counts_8 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_81 <- 100*sum(C_pv_8$n)/sum(cell_counts_8$n)
+N_pv_8 <- cell_counts_8 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_81 <- 100*sum(N_pv_8$n)/sum(cell_counts_8$n)
+B_pv_8 <- cell_counts_8 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_81 <- 100*sum(B_pv_8$n)/sum(cell_counts_8$n)
+G_pv_8 <- cell_counts_8 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_81 <- 100*sum(G_pv_8$n)/sum(cell_counts_8$n)
+
+L_pv_9 <- cell_counts_9 %>% filter(vote_2019 %in% c(".Liberal Party")) 
+L_pv_91 <- 100*sum(L_pv_9$n)/sum(cell_counts_9$n)
+C_pv_9 <- cell_counts_9 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_91 <- 100*sum(C_pv_9$n)/sum(cell_counts_9$n)
+N_pv_9 <- cell_counts_9 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_91 <- 100*sum(N_pv_9$n)/sum(cell_counts_9$n)
+B_pv_9 <- cell_counts_9 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_91 <- 100*sum(B_pv_9$n)/sum(cell_counts_9$n)
+G_pv_9 <- cell_counts_9 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_91 <- 100*sum(G_pv_9$n)/sum(cell_counts_9$n)
+
+L_pv_10 <- cell_counts_10 %>% filter(vote_2019 %in% c(".Liberal Party")) 
+L_pv_101 <- 100*sum(L_pv_10$n)/sum(cell_counts_10$n)
+C_pv_10 <- cell_counts_10 %>% filter(vote_2019 %in% c("Conservative Party"))
+C_pv_101 <- 100*sum(C_pv_10$n)/sum(cell_counts_10$n)
+N_pv_10 <- cell_counts_10 %>% filter(vote_2019 %in% c("NDP"))
+N_pv_101 <- 100*sum(N_pv_10$n)/sum(cell_counts_10$n)
+B_pv_10 <- cell_counts_10 %>% filter(vote_2019 %in% c("Bloc Quebecois"))
+B_pv_101 <- 100*sum(B_pv_10$n)/sum(cell_counts_10$n)
+G_pv_10 <- cell_counts_10 %>% filter(vote_2019 %in% c("Green Party"))
+G_pv_101 <- 100*sum(G_pv_10$n)/sum(cell_counts_10$n)
+
+# Modify global options
+options(digits = 1)              
+# creat table of values listed above 
+results_provinces <- matrix(c(
+                    L_pv_11,L_pv_21,L_pv_31,L_pv_41,L_pv_51,L_pv_61,L_pv_71,L_pv_81,L_pv_91,L_pv_101,Liberal_popular_vote_percent,
+                    C_pv_11,C_pv_21,C_pv_31,C_pv_41,C_pv_51,C_pv_61,C_pv_71,C_pv_81,C_pv_91,C_pv_101,Conservative_popular_vote_percent,
+                    B_pv_11,B_pv_21,B_pv_31,B_pv_41,B_pv_51,B_pv_61,B_pv_71,B_pv_81,B_pv_91,B_pv_101,NDP_popular_vote_percent,
+                    N_pv_11,N_pv_21,N_pv_31,N_pv_41,N_pv_51,N_pv_61,N_pv_71,N_pv_81,N_pv_91,N_pv_101,Bloc_Quebecois_popular_vote_percent,
+                    G_pv_11,G_pv_21,G_pv_31,G_pv_41,G_pv_51,G_pv_61,G_pv_71,G_pv_81,G_pv_91,G_pv_101,Green_popular_vote_percent), ncol=5)
+rownames(results_provinces) <- c("Alberta","British Columbia","Manitoba","New Brunswick", "Newfoundland and Labrador","Nova Scotia","Ontario","Prince Edward Island","Quebec","Saskatchewan","Total Popular Vote")
+colnames(results_provinces) <- c(" Liberal Party", " Conservative Party"," Bloc Quebecois","     NDP    "," Green Party")
+results.table.province <- as.table(results_provinces)
+results.table.province %>%
+  kbl() %>%
+  kable_styling() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+```{r, echo=FALSE}
+#Table 3: Seats Won by each Party Prediction Broken Down By Province
+# we multiplied the values in table 2 above, with the number of seats each province has in order to mimic election results.
+results_provinces_seats <- matrix(c(0,15,2,7,7,11,75,4,53,0,174,
+                                    34,22,11,3,0,0,41,0,2,13,126,
+                                    0,0,0,0,0,0,0,0,23,0,23,
+                                    0,5,1,0,0,0,5,0,0,1,12,
+                                    0,0,0,0,0,0,0,0,0,0,0,
+                                    34,42,14,10,7,11,121,4,78,14,335), ncol=6)
+rownames(results_provinces_seats) <- c("Alberta","British Columbia","Manitoba","New Brunswick", "Newfoundland and Labrador","Nova Scotia","Ontario","Prince Edward Island","Quebec","Saskatchewan","Total electoral seats")
+colnames(results_provinces_seats) <- c(" Liberal Party", " Conservative Party"," Bloc Quebecois","     NDP    "," Green Party"," Total Seats")
+results.table.province.seats <- as.table(results_provinces_seats)
+library(kableExtra)
+results.table.province.seats %>%
+  kbl() %>%
+  kable_styling() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+```{r,echo=FALSE,out.width="20%"}
+# Table 4: Popular Vote prediction distribution broken down by predictor variables, code to determine these values can be found in scripts under "table_4_code
+# Using the same strategy as displayed above, we broke down voting percentage by each possible response for each predictor variable 
+results_provinces1 <- matrix(c("",52.0,63.2,57.2,48.2,52.9,"",45.4,61.6,"",31.8,45.0,46.1,74.8,85.9,"",50.0,65.8,"",64.8,59.7,71.6,45.1,65.8,53.2,
+                               "",20.1,33,40.3,45.7,36.4,"",46.5,27.7,"",42.3,42.3,45.3,23.6,13.5,"",42.4,21.2,"",17.3,21.8,18.3,51.4,27.1,33.9,
+                               "",0,0.1,1.0,6.0,10.7,"",6.2,4.8,"",21.9,5.7,3.9,0.3,0.2,"",6.9,2.1,"",4.1,10.9,6.8,3.3,6.0,12.8,
+                               "",24.3,3.2,1.3,0.1,0,"",1.4,5.3,"", 3.5,6.1,4.0,1.4,0.4,"",1.0,9.7,"",12.8,5.2,2.4,0.2,0.8,0.11,
+                               "",3.6,0.5,0.2,0,0,"",0.5,0.5,"",0.4,0.9,0.7,0,0,"",0.2,1.2,"",1.0,2.3,0.8,0,0.3,0
+                               ), ncol=5)
+rownames(results_provinces1) <- c("Age","18 to 29","30 to 39","40 to 49","50 to 59", "60+","Gender","Male","Female","Education","less than high school diploma",
+                                  "Completed secondary/ high school","Completed college or equivalent","Bachelor's degree","Univeristy degree above Bachelor's degree",
+                                  "Children","Has Children","Does not have Children","Marital Status","Never Married",
+                                  "Living with a partner","Serparated","Married","Divorced","Widowed")
+colnames(results_provinces1) <- c("Liberal Party  ", "Conservative Party  ","Bloc Quebecois  ","  NDP     ","Green Party ")
+results.table.province1 <- as.table(results_provinces1)
+results.table.province1 %>%
+  kbl() %>%
+  kable_styling() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  add_indent(c(1, 7, 10,16,19))
+```
